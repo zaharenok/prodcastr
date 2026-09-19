@@ -1,122 +1,61 @@
-# prodcastr
+# Prodcastr
 
-Flutter mobile client for [Kaneo](https://github.com/usekaneo/kaneo) — a self-hosted project management platform.
+Pipeline: короткая задача → план + ресерч → PR → omp-кодинг → верификация (код + визуал) → прод.
 
-Connects to any Kaneo instance over HTTP, lets you browse projects and kanban boards, and provides a GitHub integration wizard that pulls repositories into Kaneo as projects with imported issues.
-
-## Features
-
-- **Instance connection** — point the app at any Kaneo URL (e.g. over Tailscale)
-- **Email/password authentication** — sign in with your Kaneo credentials
-- **Project browser** — list projects across workspaces, create new ones
-- **Kanban board** — horizontal column swiping, task cards with priority/due dates
-- **Task details** — markdown descriptions, inline status and priority editing
-- **GitHub wizard** — install the GitHub App on your instance, select repos, import issues as Kaneo tasks (with per-repo error handling and progress reporting)
-- **Settings** — view connected account, sign out
-
-## Tech stack
-
-| Layer | Package |
-|---|---|
-| State management | Riverpod |
-| Routing | go_router |
-| HTTP | Dio |
-| Secure storage | flutter_secure_storage |
-| Markdown rendering | markdown_widget |
-| Link opening | url_launcher |
-
-## Requirements
-
-- Flutter SDK (stable channel)
-- Android or iOS device/emulator
-- A running Kaneo instance (self-hosted or otherwise)
-
-## Getting started
-
-```bash
-# Clone
-git clone https://github.com/zaharenok/prodcastr.git
-cd prodcastr
-
-# Install dependencies
-flutter pub get
-
-# Run (connected device or emulator)
-flutter run
-
-# Build APK
-flutter build apk
-```
-
-## Project structure
+Три агента, работающие последовательно над каждой задачей:
 
 ```
-lib/
-  main.dart              # App entry, ProviderScope, router
-  session/
-    session.dart         # Riverpod session state (URL, token, user)
-  api/
-    kaneo_client.dart     # Dio setup, auth interceptor, 401 handling
-    kaneo_api.dart        # Typed Kaneo API methods
-    models.dart           # Immutable data models (fromJson parsing)
-  ui/
-    onboarding.dart       # Instance URL entry + health check
-    login.dart            # Email/password sign-in
-    projects.dart         # Project list, org picker, create dialog
-    board.dart            # Kanban board with column pages
-    github_wizard.dart    # 3-step GitHub integration wizard
-    settings.dart         # Account info, sign-out
-test/
-  api_live_test.dart      # Integration tests against live Kaneo
-  widget_test.dart        # Unit tests for screens
+Task (Kaneo card, короткий текст)
+  ↓
+[PLANNER]  план подхода + мини-ресерч репо
+  ↓
+[WRITER]   оформляет PR: ветка, коммиты, понятный title + описание с нюансами
+  ↓
+[BUILDER]  omp (--auto-approve) кодит в ветке по плану
+  ↓
+[VERIFIER] проверяет результат: код-ревью + скриншот-тест для UI-тасков
+  ↓
+Done (на проде)  /  In Progress (с замечаниями, на доработку)
 ```
 
-## Kaneo API
+## Роли
 
-The app uses the Kaneo REST API (`/api/*`). The full OpenAPI spec is available at `GET /api/openapi` on any running instance.
+### 1. Planner (`agents/planner.md`)
+Вход: заголовок + описание таска (коротко).
+Делает: анализирует репо (структура, паттерны, существующий код), строит план подхода — шаги, файлы, риски. Выход: краткий план ≤ 15 строк, который ложится в промпт Builder'а.
 
-Key endpoints consumed:
+### 2. Writer (`agents/writer.md`)
+Вход: план Planner'а.
+Делает: создаёт ветку `get-N`, пишет качественный PR: короткое внятное название (что и зачем), описание с нюансами (что меняется, где, на что обратить внимание при ревью). Выход: готовая ветка + PR draft.
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/health` | Instance health check |
-| `POST` | `/api/auth/sign-in/email` | Email/password sign-in |
-| `GET` | `/api/auth/organization/list` | List workspaces |
-| `GET` | `/api/project` | List projects |
-| `POST` | `/api/project` | Create project |
-| `GET` | `/api/task/tasks/{projectId}` | Board with columns and tasks |
-| `POST` | `/api/task/{projectId}` | Create task |
-| `PUT` | `/api/task/status/{id}` | Move task between columns |
-| `PUT` | `/api/task/priority/{id}` | Change task priority |
-| `GET` | `/github-integration/app-info` | GitHub App name |
-| `GET` | `/github-integration/repositories/{projectId}` | Available repos |
-| `POST` | `/github-integration/project/{projectId}` | Link repo to project |
-| `POST` | `/github-integration/import-issues` | Import GitHub issues |
+### 3. Builder (`agents/builder.md`)
+Вход: PR + план.
+Делает: omp реализует код в ветке (auto-approve). Выход: закоммиченный код, замерженный в main, задеплоенный.
 
-## GitHub integration
+### 4. Verifier (`agents/verifier.md`)
+Вход: смерженный PR + исходная задача.
+Делает:
+- **Код**: читает диф, проверяет соответствие задаче, отсутствие регрессий, мусора, секретов.
+- **Визуал** (если UI-таск): Playwright скриншоты живых страниц, GLM-5.3 (vision) оценивает рендер, читаемость, отсутствие поломанного layout.
+Выход: PASS → Done. FAIL → таск в In Progress с конкретными замечаниями, цикл повторяется.
 
-The app does not implement GitHub integration itself — Kaneo's server already includes a GitHub App. The wizard:
+## Инфраструктура (VPS)
 
-1. Checks if the GitHub App is configured on the instance
-2. Opens the App installation page on GitHub
-3. Lists available repositories
-4. Creates a Kaneo project per selected repo, links it, and imports issues
+- Kaneo (форк `zaharenok/kaneo`) — доска: http://100.116.28.100:3012
+- `~/bin/kaneo-poll.sh` — поллер In Progress → запуск пайплайна (systemd timer, 5 мин)
+- `~/bin/kaneo-comment-watch.sh` — фидбек из карточек → доработка
+- `~/bin/kaneo-stall-watch.py` — детектор зависших прогонов (>1ч warn, >2ч kill)
+- `~/bin/kaneo-task-runner.sh` — оркестратор прогона (omp + auto-merge + deploy)
+- Проект-песочница: `~/projects/gethello-io/web` (gethello.io)
 
-The GitHub App must be installed on the Kaneo instance (see Kaneo docs for `GITHUB_APP_*` environment variables).
+## Модели
 
-## Development
+- Builder: `command-code/xiaomi/mimo-v2.5` (дёшево, быстро)
+- Verifier/vision: `z-ai/glm-5.3` + `glm-5.3-flash` (vision)
+- Planner: glm-5.3 (качество планирования важнее цены)
 
-```bash
-# Analyze
-flutter analyze
+## Статусы доски
 
-# Run tests (Dart VM, no emulator needed)
-flutter test
-
-# Run live integration tests against a Kaneo instance
-flutter test test/api_live_test.dart --dart-define=KANEO_URL=http://your-instance:3012
 ```
-
-## License
-
-MIT
+To Do → In Progress → In Review (= смержено на прод) → Done (= проверено/принято)
+```
