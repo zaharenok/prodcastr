@@ -56,9 +56,35 @@ kaneo-queue.sh process
 
 Файл очереди: `~/.kaneo-runner.log.queue`. Записи старше 48ч автоматически удаляются.
 
+## Запуск проекта в пайплайн
+
+`~/bin/kaneo-schedule.sh` — ставит все to-do задачи проекта в очередь.
+
+```
+kaneo-schedule.sh <проект> [режим]
+
+Режимы:
+  (пусто)             — dry run: показать задачи
+  now                 — все в очередь, поллер возьмёт при следующем тике
+  run                 — первая задача сразу In Progress + runner, остальные в очередь
+  YYYY-MM-DD HH:MM    — все задачи на указанное время
+```
+
+Примеры:
+```bash
+kaneo-schedule.sh prodcastr                    # посмотреть что есть
+kaneo-schedule.sh prodcastr now                # поставить всё в очередь
+kaneo-schedule.sh prodcastr run                # запустить первую сразу
+kaneo-schedule.sh prodcastr "2026-09-21 03:00" # поставить на 3 часа ночи
+```
+
+Очередь: `~/.kaneo-runner.log.queue` (поллер `kaneo-poll.sh` проверяет очередь первым делом).
+Просмотр очереди: `kaneo-queue.sh list`
+
 ## Ручные роли Oleg
 
 - Пишет задачи коротко (GLM обогащает в ТЗ — см. comment-watch)
+- Запускает проекты: `kaneo-schedule.sh <slug> now|run|время`
 - Смотрит прод после Done
 - Комментарий = доработка
 - Ставит задачи в очередь через `kaneo-queue.sh add` (немедленно или на ночь)
